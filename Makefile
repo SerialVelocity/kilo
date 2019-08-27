@@ -16,7 +16,7 @@ CLIENT_BINS := $(addsuffix /kgctl, $(addprefix bin/, $(addprefix linux/, $(ALL_A
 PROJECT := kilo
 PKG := github.com/squat/$(PROJECT)
 REGISTRY ?= index.docker.io
-IMAGE ?= squat/$(PROJECT)
+IMAGE ?= chillichef/$(PROJECT)
 
 TAG := $(shell git describe --abbrev=0 --tags HEAD 2>/dev/null)
 COMMIT := $(shell git rev-parse HEAD)
@@ -251,12 +251,14 @@ container-name:
 
 manifest: .manifest-$(VERSION) manifest-name
 .manifest-$(VERSION): Dockerfile $(addprefix push-, $(ALL_ARCH))
-	@docker manifest create --amend $(IMAGE):$(VERSION) $(addsuffix -$(VERSION), $(addprefix squat/$(PROJECT):, $(ALL_ARCH)))
+	@docker manifest rm $(IMAGE):$(VERSION)
+	@docker manifest create --amend $(IMAGE):$(VERSION) $(addsuffix -$(VERSION), $(addprefix chillichef/$(PROJECT):, $(ALL_ARCH)))
 	@$(MAKE) --no-print-directory manifest-annotate-$(VERSION)
 	@docker manifest push $(IMAGE):$(VERSION) > $@
 
 manifest-latest: Dockerfile $(addprefix push-latest-, $(ALL_ARCH))
-	@docker manifest create --amend $(IMAGE):latest $(addsuffix -latest, $(addprefix squat/$(PROJECT):, $(ALL_ARCH)))
+	@docker manifest rm $(IMAGE):latest
+	@docker manifest create --amend $(IMAGE):latest $(addsuffix -latest, $(addprefix chillichef/$(PROJECT):, $(ALL_ARCH)))
 	@$(MAKE) --no-print-directory manifest-annotate-latest
 	@docker manifest push $(IMAGE):latest
 	@echo "manifest: $(IMAGE):latest"

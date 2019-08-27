@@ -76,7 +76,7 @@ type segment struct {
 }
 
 // NewTopology creates a new Topology struct from a given set of nodes and peers.
-func NewTopology(nodes map[string]*Node, peers map[string]*Peer, granularity Granularity, hostname string, port uint32, key []byte, subnet *net.IPNet, persistentKeepalive int) (*Topology, error) {
+func NewTopology(nodes map[string]*Node, peers map[string]*Peer, granularity Granularity, hostType string, hostname string, port uint32, key []byte, subnet *net.IPNet, persistentKeepalive int) (*Topology, error) {
 	topoMap := make(map[string][]*Node)
 	for _, node := range nodes {
 		var location string
@@ -92,17 +92,27 @@ func NewTopology(nodes map[string]*Node, peers map[string]*Peer, granularity Gra
 		topoMap[location] = append(topoMap[location], node)
 	}
 	var localLocation string
-	switch granularity {
-	case LogicalGranularity:
-		localLocation = logicalLocationPrefix + nodes[hostname].Location
-		if nodes[hostname].InternalIP == nil {
+	if hostType == "node" {
+		switch granularity {
+		case LogicalGranularity:
+			localLocation = logicalLocationPrefix + nodes[hostname].Location
+			if nodes[hostname].InternalIP == nil {
+				localLocation = nodeLocationPrefix + hostname
+			}
+		case FullGranularity:
 			localLocation = nodeLocationPrefix + hostname
 		}
-	case FullGranularity:
-		localLocation = nodeLocationPrefix + hostname
+	} else {
+		localLocation = hostname
 	}
 
-	t := Topology{key: key, port: port, hostname: hostname, location: localLocation, persistentKeepalive: persistentKeepalive, privateIP: nodes[hostname].InternalIP, subnet: nodes[hostname].Subnet}
+	privateIP := &net.IPNet{IP: []byte{0, 0, 0, 0}, Mask: []byte{255, 255, 255, 255}}
+	localPodSubnet := &net.IPNet{IP: []byte{0, 0, 0, 0}, Mask: []byte{255, 255, 255, 255}}
+	if hostType == "node" {
+		privateIP = nodes[hostname].InternalIP
+		localPodSubnet = nodes[hostname].Subnet
+	}
+	t := Topology{key: key, port: port, hostname: hostname, location: localLocation, persistentKeepalive: persistentKeepalive, privateIP: privateIP, subnet: localPodSubnet}
 	for location := range topoMap {
 		// Sort the location so the result is stable.
 		sort.Slice(topoMap[location], func(i, j int) bool {
@@ -168,6 +178,17 @@ func NewTopology(nodes map[string]*Node, peers map[string]*Peer, granularity Gra
 			t.wireGuardCIDR = &net.IPNet{IP: ipNet.IP, Mask: subnet.Mask}
 		}
 	}
+	if hostType == "peer" {
+		t.leader = true
+		var thisPeer *Peer
+		for _, peer := range peers {
+			if peer.Name == hostname {
+				thisPeer = peer
+				break
+			}
+		}
+		t.wireGuardCIDR = thisPeer.AllowedIPs[0]
+	}
 
 	return &t, nil
 }
@@ -193,6 +214,9 @@ func (t *Topology) Conf() *wireguard.Conf {
 		c.Peers = append(c.Peers, peer)
 	}
 	for _, p := range t.peers {
+		if p.Name == t.location {
+			continue
+		}
 		peer := &wireguard.Peer{
 			AllowedIPs:          p.AllowedIPs,
 			Endpoint:            p.Endpoint,

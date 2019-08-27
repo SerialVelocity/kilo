@@ -111,6 +111,9 @@ func (t *Topology) Routes(kiloIfaceName string, kiloIface, privIface, tunlIface 
 		}
 		// Add routes for the allowed IPs of peers.
 		for _, peer := range t.peers {
+			if peer.Name == t.location {
+				continue
+			}
 			for i := range peer.AllowedIPs {
 				routes = append(routes, encapsulateRoute(&netlink.Route{
 					Dst:       peer.AllowedIPs[i],
@@ -201,6 +204,9 @@ func (t *Topology) Routes(kiloIfaceName string, kiloIface, privIface, tunlIface 
 	}
 	// Add routes for the allowed IPs of peers.
 	for _, peer := range t.peers {
+		if peer.Name == t.location {
+			continue
+		}
 		for i := range peer.AllowedIPs {
 			routes = append(routes, &netlink.Route{
 				Dst:       peer.AllowedIPs[i],

@@ -56,6 +56,7 @@ type Mesh struct {
 	externalIP   *net.IPNet
 	granularity  Granularity
 	hostname     string
+	hostType     string
 	internalIP   *net.IPNet
 	ipTables     *iptables.Controller
 	kiloIface    int
@@ -85,7 +86,7 @@ type Mesh struct {
 }
 
 // New returns a new Mesh instance.
-func New(backend Backend, enc encapsulation.Encapsulator, granularity Granularity, hostname string, port uint32, subnet *net.IPNet, local, cni bool, cniPath, iface string, cleanUpIface bool, createIface bool, logger log.Logger) (*Mesh, error) {
+func New(backend Backend, enc encapsulation.Encapsulator, granularity Granularity, hostname string, hostType string, port uint32, subnet *net.IPNet, local, cni bool, cniPath, iface string, cleanUpIface bool, createIface bool, logger log.Logger) (*Mesh, error) {
 	if err := os.MkdirAll(kiloPath, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create directory to store configuration: %v", err)
 	}
@@ -156,6 +157,7 @@ func New(backend Backend, enc encapsulation.Encapsulator, granularity Granularit
 		externalIP:   publicIP,
 		granularity:  granularity,
 		hostname:     hostname,
+		hostType:     hostType,
 		internalIP:   privateIP,
 		ipTables:     ipTables,
 		kiloIface:    kiloIface,
@@ -200,7 +202,7 @@ func (m *Mesh) Run() error {
 	}
 	// Try to set the CNI config quickly.
 	if m.cni {
-		if n, err := m.Nodes().Get(m.hostname); err == nil {
+		if n, err := m.Nodes().Get(m.hostname); m.hostType == "node" && err == nil {
 			m.nodes[m.hostname] = n
 			m.updateCNIConfig()
 		} else {
@@ -246,7 +248,9 @@ func (m *Mesh) Run() error {
 		case pe = <-pw:
 			m.syncPeers(pe)
 		case <-t.C:
-			m.checkIn()
+			if m.hostType == "node" {
+				m.checkIn()
+			}
 			if m.cni {
 				m.updateCNIConfig()
 			}
@@ -263,7 +267,9 @@ func (m *Mesh) syncNodes(e *NodeEvent) {
 	level.Debug(logger).Log("msg", "syncing nodes", "event", e.Type)
 	if isSelf(m.hostname, e.Node) {
 		level.Debug(logger).Log("msg", "processing local node", "node", e.Node)
-		m.handleLocal(e.Node)
+		if m.hostType == "node" {
+			m.handleLocal(e.Node)
+		}
 		return
 	}
 	var diff bool
@@ -445,7 +451,7 @@ func (m *Mesh) applyTopology() {
 	m.nodesGuage.Set(readyNodes)
 	m.peersGuage.Set(readyPeers)
 	// We cannot do anything with the topology until the local node is available.
-	if nodes[m.hostname] == nil {
+	if (m.hostType == "node" && nodes[m.hostname] == nil) || (m.hostType == "peer" && (peers[string(m.pub)] == nil || peers[string(m.pub)].Name != m.hostname)) {
 		return
 	}
 	// Find the Kilo interface name.
@@ -464,7 +470,17 @@ func (m *Mesh) applyTopology() {
 	}
 	oldConf := wireguard.Parse(oldConfRaw)
 	updateNATEndpoints(nodes, peers, oldConf)
-	t, err := NewTopology(nodes, peers, m.granularity, m.hostname, nodes[m.hostname].Endpoint.Port, m.priv, m.subnet, nodes[m.hostname].PersistentKeepalive)
+
+	var endpointPort uint32
+	var persistentKeepalive int
+	if m.hostType == "node" {
+		endpointPort = nodes[m.hostname].Endpoint.Port
+		persistentKeepalive = nodes[m.hostname].PersistentKeepalive
+	} else {
+		endpointPort = m.port
+		persistentKeepalive = peers[string(m.pub)].PersistentKeepalive
+	}
+	t, err := NewTopology(nodes, peers, m.granularity, m.hostType, m.hostname, endpointPort, m.priv, m.subnet, persistentKeepalive)
 	if err != nil {
 		level.Error(m.logger).Log("error", err)
 		m.errorCounter.WithLabelValues("apply").Inc()
@@ -591,9 +607,11 @@ func (m *Mesh) cleanUp() {
 			m.errorCounter.WithLabelValues("cleanUp").Inc()
 		}
 	}
-	if err := m.Nodes().CleanUp(m.hostname); err != nil {
-		level.Error(m.logger).Log("error", fmt.Sprintf("failed to clean up node backend: %v", err))
-		m.errorCounter.WithLabelValues("cleanUp").Inc()
+	if m.hostType == "node" {
+		if err := m.Nodes().CleanUp(m.hostname); err != nil {
+			level.Error(m.logger).Log("error", fmt.Sprintf("failed to clean up node backend: %v", err))
+			m.errorCounter.WithLabelValues("cleanUp").Inc()
+		}
 	}
 	if err := m.Peers().CleanUp(m.hostname); err != nil {
 		level.Error(m.logger).Log("error", fmt.Sprintf("failed to clean up peer backend: %v", err))
